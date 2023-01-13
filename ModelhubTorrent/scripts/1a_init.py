@@ -1,5 +1,14 @@
 """
 Initialize by downloading all repos from modelhub.ai
+Environment variables that affect how this script runs:
+    MHTORRENT_USE_LOCAL_MODEL_INDEX: if set, the script will not fetch the main model index and use the one saved locally
+    MHTORRENT_SKIP_CLONE: if set, the script will not clone any github repository (assumes repos have been downloaded)
+    MHTORRENT_SKIP_DOWNLOAD: if set, the script will not download externally hosted models such as those hosted through GitHub releases
+
+    so if you already have downloaded all the models and cloned the repos, you could run the script like this:
+    `$ MHTORRENT_USE_LOCAL_MODEL_INDEX=1  MHTORRENT_SKIP_CLONE=1 MHTORRENT_SKIP_DOWNLOAD=1 ./run.bash`
+    
+
 """
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +19,7 @@ from json import loads, dumps
 import requests
 from model import Model
 from util import handle_errors
+
 
 curr: Path
 repos_dir: Path
@@ -25,11 +35,11 @@ MODEL_JSON_URL = (
 headers = {"User-Agent": "MHTorrent - python/requests"}
 
 
-def get_overview() -> List[TModelResponse]:
+def get_model_index() -> List[TModelResponse]:
     """
     get the main models.json file from modelhub repo.
     this approach is okay to use as modelhub official repositories
-    seem to be suing this approach to get the model index
+    seem to be using this approach to get the model index
     https://github.com/modelhub-ai/unet-2d/blob/master/init/start.py#L203
 
     """
@@ -50,8 +60,8 @@ def download_file(url: str, dest: Path):
     """
     wrap wget or maybe implement a requests based streaming downlaod
     """
-    strategy = "wget"  # or requests
-    # if strategy == "wget":
+    # strategy = "wget"  # or requests
+    # # if strategy == "wget":
     args = ["wget", url, "-O", str(dest)]
 
     print(subprocess_run(args).returncode)
@@ -68,10 +78,10 @@ def clone_repo(model_meta: TModelResponse):
     # bare_repo_path = repo_dir / name
     # do a shallow clone instead of a bare clone
     # restoring and dealing with lfs is not a concern for our PTM
-    args = ["git", "clone", "--depth=1", github_repo, f"{name}"]
+
     # skip cloning repos?
     if not environ.get("MHTORRENT_SKIP_CLONE"):
-        subprocess_run(args)
+        subprocess_run(["git", "clone", "--depth=1", github_repo, f"{name}"])
     repo_root = repos_dir / name
     init_file = repo_root / "init/init.json"
     data = loads(init_file.read_text())
@@ -80,8 +90,8 @@ def clone_repo(model_meta: TModelResponse):
             src: str = external_files["src_url"]
             # some init.json files have completely broken urls (they use them as comments instead)
             # which is not great
-            # lucklily their urls start with https:// so we can just check for that
-            if not src.startswith("https://"):
+            # so we have to check for this
+            if not src.startswith("http"):
                 continue
             dest: str = external_files["dest_file_path"]
             # make sure pathlib doesn't end up giving us a `/contrib_src` path
@@ -102,10 +112,6 @@ def clone_repo(model_meta: TModelResponse):
     model = Model(config, mh_metadata_path.relative_to(model_metadata_dir), github_repo)
     general_model_metadata_path.write_text(dumps(model.as_json))
     mh_metadata_path.write_text(dumps(config))
-    # bare_to_full(model_meta, bare_repo_path)
-
-    # todo: add if needed
-    # subprocess.run(["git", "checkout", github_branch])
 
 
 def safe_dir(where: str):
@@ -124,7 +130,7 @@ def create_model_repos():
     if environ.get("MHTORRENT_USE_LOCAL_MODEL_INDEX"):
         models = loads(models_file.read_text())
     else:
-        models = get_overview()
+        models = get_model_index()
     chdir(repos_dir)
     # clone the models in a threadpool
     # workers could be configurable but 5 seems to be able to finish the job quickly
